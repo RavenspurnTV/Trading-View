@@ -1,0 +1,113 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Ravenspurnse
+
+//@version=6
+strategy("AE Linear Regression", overlay=true, fill_orders_on_standard_ohlc = true)
+
+//Variables
+//Linear Regression
+int_LR12Length =    input.int(200, "Linear Regression 1 & 2 Length", group="Linear Regression")
+col_LR =            input.color(color.yellow, "Linear Regression slope colour", group="Linear Regression")
+dbl_LR1Deviation =  input.float(2.0, "Linear Regression Inner Deviation", group="Linear Regression")
+col_LRD1 =          input.color(color.purple, "Linear Regression Inner envelope colour", group="Linear Regression")
+dbl_LR2Deviation =  input.float(2.5, "Linear Regression Outer Deviation", group="Linear Regression")
+col_LRD2 =          input.color(color.lime, "Linear Regression Outer envelope colour", group="Linear Regression")
+//Stop Loss
+dbl_SLDelta =       input.float(2.0, "Stop Loss Delta multiplier", group="Trade Data")
+//RRR
+dbl_RRRMultiplier = input.float(2.5, "Risk Reward Ratio Multiplier", group="Trade Data")
+//Filtering
+int_ATRLength =      input.int(14, "ATR Value", group="ATR Filtering")
+// Options
+bool_UseATR =       input.bool(true, "Use ATR?", group="ATR Filtering")
+
+//On Screen Live TP and SL
+// Reset when flat
+var float StoredEntry = na
+var float StoredSL = na
+var float StoredTP = na
+var line EntryLine = na
+var line TPLine = na
+var line SLLine = na
+
+//ATR
+atrValue = ta.atr(int_ATRLength)
+atrLow  = ta.lowest(atrValue, int_LR12Length)
+atrHigh = ta.highest(atrValue, int_LR12Length)
+
+atrMidLow  = atrLow  + (atrHigh - atrLow) * 0.30
+atrMidHigh = atrLow  + (atrHigh - atrLow) * 0.70
+
+bool_ATROK = atrValue > atrMidLow and atrValue < atrMidHigh
+
+//Linear Regression
+length =    int_LR12Length
+Dev1 =      dbl_LR1Deviation
+Dev2 =      dbl_LR2Deviation
+
+LRLine =    ta.linreg(close, length, 0)
+LRDev =     ta.stdev(close, length)
+
+//LR1 (Inner Channel)
+LR1Upper =  LRLine + (LRDev * Dev1)
+LR1Lower =  LRLine - (LRDev * Dev1)
+
+//LR2 (Outer Channel)
+LR2Upper =  LRLine + (LRDev * Dev2)
+LR2Lower =  LRLine - (LRDev * Dev2)
+
+
+// Entry Conditions
+// Long Conditions
+long_condition = bool_UseATR ? (bool_ATROK and high[1] < LR1Lower[1] and close > LR1Lower) : (high[1] < LR1Lower[1] and close > LR1Lower)
+
+// Short Conditions
+short_condition = bool_UseATR ? (bool_ATROK and high[1] > LR1Upper[1] and close < LR1Upper) : (high[1] > LR1Upper[1] and close < LR1Upper)
+
+// Entry Logic
+if (long_condition)
+    Channel_Diff = math.abs(LR2Upper - LR1Upper) * 2
+    sl_price = close - Channel_Diff
+    risk_value = Channel_Diff
+    reward_value = float(risk_value * dbl_SLDelta)
+    tp_price = close + reward_value
+    strategy.entry("Long", strategy.long)
+    EntryPrice = strategy.opentrades.entry_price(strategy.opentrades)
+    strategy.exit("Trailing Long", "Long", stop = sl_price, comment_loss = "SL " + str.tostring(sl_price), limit = tp_price, comment_profit = "TP " + str.tostring(close+reward_value))
+    StoredEntry := strategy.opentrades.entry_price(0)
+    StoredSL := sl_price
+    StoredTP := tp_price
+
+
+if (short_condition)
+    Channel_Diff = math.abs(LR1Lower - LR2Lower) * 2
+    sl_price = close + Channel_Diff
+    risk_value = Channel_Diff
+    reward_value = float(risk_value * dbl_SLDelta)
+    tp_price = close - reward_value
+    strategy.entry("Short", strategy.short)
+    EntryPrice = strategy.opentrades.entry_price(strategy.opentrades)
+    strategy.exit("Trailing Short", "Short", stop = sl_price,  comment_loss = "SL " + str.tostring(sl_price), limit = tp_price, comment_profit = "TP " + str.tostring(close-reward_value))
+    StoredEntry := strategy.opentrades.entry_price(0)
+    StoredSL := sl_price
+    StoredTP := tp_price
+
+if (strategy.position_size == 0)
+    StoredEntry := na
+    StoredSL := na
+    StoredTP := na
+    line.delete(EntryLine)
+    line.delete(TPLine)
+    line.delete(SLLine)
+
+if (strategy.opentrades > 0 and bar_index == strategy.opentrades.entry_bar_index(0))
+    EntryLine := line.new(bar_index, StoredEntry, bar_index + 1, StoredEntry, extend=extend.right, color=color.yellow, width=2)
+    TPLine := line.new(bar_index, StoredTP, bar_index + 1, StoredTP, extend=extend.right, color=color.orange, width=2)
+    SLLine := line.new(bar_index, StoredSL, bar_index + 1, StoredSL, extend=extend.right, color=color.purple, width=2)
+
+// Plotting
+plot(LRLine, color=col_LR, linewidth = 3, title="Linear Regression Slope")
+plot(LR2Upper, color=col_LRD2, linewidth = 3, title="Outer Envelope")
+plot(LR1Upper, color=col_LRD1, linewidth = 3, title="Inner Envelope")
+plot(LR1Lower, color=col_LRD1, linewidth = 3, title="Inner Envelope")
+plot(LR2Lower, color=col_LRD2, linewidth = 3, title="Outer Envelope")
