@@ -1,0 +1,207 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Ravenspurnse
+
+//@version=6
+strategy("AE Linear Regression", overlay=true, fill_orders_on_standard_ohlc = true)
+//Version 1,3
+
+//Variables
+//Linear Regression
+int_LR12Length =    input.int(200, "Linear Regression 1 & 2 Length", group="Linear Regression")
+col_LR =            input.color(color.yellow, "Linear Regression slope colour", group="Linear Regression")
+dbl_LR1Deviation =  input.float(2.0, "Linear Regression Inner Deviation", group="Linear Regression")
+col_LRD1 =          input.color(color.purple, "Linear Regression Inner envelope colour", group="Linear Regression")
+dbl_LR2Deviation =  input.float(2.5, "Linear Regression Outer Deviation", group="Linear Regression")
+col_LRD2 =          input.color(color.lime, "Linear Regression Outer envelope colour", group="Linear Regression")
+txt_Extension =     input.string("None", options = ["None", "Left", "Right", "Both"], title = "Extend Regession Channel", group="Linear Regression")
+enum_ext =          txt_Extension == "None"  ? extend.none  : txt_Extension == "Left"  ? extend.left  : txt_Extension == "Both"  ? extend.both  : extend.right
+//Source
+dbl_Source =        input.source(close, "Source", group="Trade Data")
+//Stop Loss
+dbl_SLDelta =       input.float(2.0, "Stop Loss Delta multiplier", group="Trade Data")
+//RRR
+dbl_RRRMultiplier = input.float(2.5, "Risk Reward Ratio Multiplier", group="Trade Data")
+//Filtering
+int_ATRLength =     input.int(14, "ATR Value", group="ATR Filtering")
+// Options
+bool_UseATR =       input.bool(true, "Use ATR?", group="ATR Filtering")
+// Trade filtering
+var bool AllowTrading = true
+currentDay =        dayofweek(time)
+prevDay    =        dayofweek(time[1])
+if currentDay != prevDay
+    AllowTrading := true
+if strategy.closedtrades > 0
+    last = strategy.closedtrades - 1
+    exitComment = strategy.closedtrades.exit_comment(last)
+    if str.startswith(exitComment, "SL")
+        AllowTrading := false
+
+//On Screen Live TP SL, and LR
+// Reset when flat
+var float StoredEntry = na
+var float StoredSL = na
+var float StoredTP = na
+var line EntryLine = na
+var line TPLine = na
+var line SLLine = na
+
+var line lrLine   = na
+var line lr1Upper = na
+var line lr1Lower = na
+var line lr2Upper = na
+var line lr2Lower = na
+
+//ATR
+atrValue =  ta.atr(int_ATRLength)
+atrLow  =   ta.lowest(atrValue, int_LR12Length)
+atrHigh =   ta.highest(atrValue, int_LR12Length)
+
+atrMidLow  = atrLow  + (atrHigh - atrLow) * 0.30
+atrMidHigh = atrLow  + (atrHigh - atrLow) * 0.70
+
+bool_ATROK = atrValue > atrMidLow and atrValue < atrMidHigh
+
+//Linear Regression (Envelope)
+src =       dbl_Source
+length =    int_LR12Length
+Dev1 =      dbl_LR1Deviation
+Dev2 =      dbl_LR2Deviation
+
+//On Scren Regression engine
+calcSlope(src, length) =>
+    float sumX = 0
+    float sumY = 0
+    float sumXY = 0
+    float sumXX = 0
+
+    for i = 0 to length - 1
+        x = i
+        y = src[i]
+        sumX  += x
+        sumY  += y
+        sumXY += x * y
+        sumXX += x * x
+
+    n = length
+    slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX)
+    intercept = (sumY - slope * sumX) / n
+    [slope, intercept]
+
+calcDev(src, length, slope, intercept) =>
+    float sum = 0.0
+    for i = 0 to length - 1
+        fit = slope * i + intercept
+        sum += math.pow(src[i] - fit, 2)
+    math.sqrt(sum / length)
+
+// line setup
+lset(l, x1, y1, x2, y2, col, w=3) =>
+    line.set_xy1(l, x1, y1)
+    line.set_xy2(l, x2, y2)
+    line.set_color(l, col)
+    line.set_width(l, w)
+
+// Run engine
+[slope, intercept] = calcSlope(src, length)
+stdDev = calcDev(src, length, slope, intercept)
+
+// Plotting
+if barstate.isfirst
+    lrLine   := line.new(0, 0, 0, 0, extend=enum_ext)
+    lr1Upper := line.new(0, 0, 0, 0, extend=enum_ext)
+    lr1Lower := line.new(0, 0, 0, 0, extend=enum_ext)
+    lr2Upper := line.new(0, 0, 0, 0, extend=enum_ext)
+    lr2Lower := line.new(0, 0, 0, 0, extend=enum_ext)
+
+// Start of the regression window
+x1 = bar_index - length + 1
+// End of the regression window (current bar)
+x2 = bar_index
+// penultimnate bar.
+x3 = bar_index - 1
+// Update lines
+y1  = slope * (length - 1) + intercept
+y2 = slope * 0 + intercept
+y3 = slope * 1 + intercept
+
+LRUPy1d1 = y1 + stdDev * Dev1
+LRUPy2d1 = y2 + stdDev * Dev1
+LRDNy1d1 = y1 - stdDev * Dev1
+LRDNy2d1 = y2 - stdDev * Dev1
+LRUPy3d1 = y3 + stdDev * Dev1
+LRDNy3d1 = y3 - stdDev * Dev1
+
+LRUPy1d2  = y1  + stdDev * Dev2
+LRUPy2d2 = y2 + stdDev * Dev2
+LRDNy1d2  = y1  - stdDev * Dev2
+LRDNy2d2 = y2 - stdDev * Dev2
+
+lset(lrLine, x1, y1, x2, y2, col_LR)
+lset(lr1Upper, x1, LRUPy1d1, x2, LRUPy2d1, col_LRD1, 3)
+lset(lr1Lower, x1, LRDNy1d1, x2, LRDNy2d1, col_LRD1, 3)
+lset(lr2Upper, x1, LRUPy1d2, x2, LRUPy2d2, col_LRD2, 3)
+lset(lr2Lower, x1, LRDNy1d2, x2, LRDNy2d2, col_LRD2, 3)
+
+//var label dynLabel = na
+
+//if na(dynLabel)
+ //   dynLabel := label.new(bar_index, y1, "")
+ //   label.set_xy(dynLabel, bar_index, y1)
+ //   label.set_text(dynLabel, "y1=" + str.tostring(y1, "#.####") + " | y2=" + str.tostring(y2, "#.####"))
+
+// Entry Conditions
+// Long Conditions
+long_condition = bool_UseATR ? (bool_ATROK and high[1] < LRDNy3d1 and close > LRDNy2d1 and AllowTrading) : (high[1] < LRDNy3d1 and close > LRDNy2d1 and AllowTrading)
+
+// Short Conditions
+short_condition = bool_UseATR ? (bool_ATROK and high[1] > LRUPy3d1 and close < LRUPy2d1 and AllowTrading) : (high[1] > LRUPy3d1 and close < LRUPy2d1 and AllowTrading)
+
+// Entry Logic
+if (long_condition)
+    Channel_Diff = math.abs(LRUPy2d2 - LRUPy2d1) * dbl_SLDelta
+    sl_price = close - Channel_Diff
+    risk_value = Channel_Diff
+    reward_value = float(risk_value * dbl_RRRMultiplier)
+    tp_price = close + reward_value
+    strategy.entry("Long", strategy.long)
+    EntryPrice = strategy.opentrades.entry_price(strategy.opentrades)
+    strategy.exit("Trailing Long", "Long", stop = sl_price, comment_loss = "SL " + str.tostring(sl_price), limit = tp_price, comment_profit = "TP " + str.tostring(close+reward_value))
+    StoredEntry := strategy.opentrades.entry_price(0)
+    StoredSL := sl_price
+    StoredTP := tp_price
+
+
+if (short_condition)
+    Channel_Diff = math.abs(LRDNy2d1 - LRDNy2d2) * dbl_SLDelta
+    sl_price = close + Channel_Diff
+    risk_value = Channel_Diff
+    reward_value = float(risk_value * dbl_RRRMultiplier)
+    tp_price = close - reward_value
+    strategy.entry("Short", strategy.short)
+    EntryPrice = strategy.opentrades.entry_price(strategy.opentrades)
+    strategy.exit("Trailing Short", "Short", stop = sl_price,  comment_loss = "SL " + str.tostring(sl_price), limit = tp_price, comment_profit = "TP " + str.tostring(close-reward_value))
+    StoredEntry := strategy.opentrades.entry_price(0)
+    StoredSL := sl_price
+    StoredTP := tp_price
+
+if (strategy.position_size == 0)
+    StoredEntry := na
+    StoredSL := na
+    StoredTP := na
+    line.delete(EntryLine)
+    line.delete(TPLine)
+    line.delete(SLLine)
+
+if (strategy.opentrades > 0 and bar_index == strategy.opentrades.entry_bar_index(0))
+    EntryLine := line.new(bar_index, StoredEntry, bar_index + 1, StoredEntry, extend=extend.right, color=color.yellow, width=2)
+    TPLine := line.new(bar_index, StoredTP, bar_index + 1, StoredTP, extend=extend.right, color=color.orange, width=2)
+    SLLine := line.new(bar_index, StoredSL, bar_index + 1, StoredSL, extend=extend.right, color=color.purple, width=2)
+
+// Envelope Plotting
+
+//plot(LRLine, color=col_LR, linewidth = 3, title="Linear Regression Slope")
+//plot(LR2Upper, color=col_LRD2, linewidth = 3, title="Outer Envelope")
+//plot(LR1Upper, color=col_LRD1, linewidth = 3, title="Inner Envelope")
+//plot(LR1Lower, color=col_LRD1, linewidth = 3, title="Inner Envelope")
+//plot(LR2Lower, color=col_LRD2, linewidth = 3, title="Outer Envelope")
